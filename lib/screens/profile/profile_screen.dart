@@ -18,8 +18,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
-    // التأكد من أن البيانات تُطلب عند عرض الشاشة
-    // listen: false ضرورية داخل initState
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ProfileProvider>().fetchProfileData();
     });
@@ -68,12 +66,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   leading: Icon(Icons.logout, color: Colors.red[400]),
                   title: const Text('تسجيل الخروج'),
                   onTap: () async {
-                    Navigator.of(modalContext).pop(); // إغلاق القائمة
+                    Navigator.of(modalContext).pop();
                     profileProvider.clearDataOnSignOut();
                     await supabase.auth.signOut();
                   },
                 ),
-                const SizedBox(height: 20), // مسافة آمنة في الأسفل
+                const SizedBox(height: 20),
               ],
             );
           },
@@ -129,22 +127,44 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final imageFile =
         await picker.pickImage(source: ImageSource.gallery, imageQuality: 50);
     if (imageFile == null) return;
+
     final profileProvider = context.read<ProfileProvider>();
+    final oldAvatarUrl = profileProvider.avatarUrl;
+
     try {
       final userId = supabase.auth.currentUser!.id;
       final file = File(imageFile.path);
       final fileName = '${DateTime.now().millisecondsSinceEpoch}.png';
       final filePath = '$userId/$fileName';
+
+      // 1. Upload new image
       await supabase.storage.from('avatars').upload(filePath, file);
-      final imageUrl = supabase.storage.from('avatars').getPublicUrl(filePath);
+
+      // 2. Get new image public URL
+      final newImageUrl =
+          supabase.storage.from('avatars').getPublicUrl(filePath);
+
+      // 3. Update database
       await supabase
           .from('profiles')
-          .update({'avatar_url': imageUrl}).eq('id', userId);
-      if (mounted) profileProvider.updateAvatar(imageUrl);
+          .update({'avatar_url': newImageUrl}).eq('id', userId);
+
+      // 4. If update is successful, delete old image from storage
+      if (oldAvatarUrl != null && oldAvatarUrl.isNotEmpty) {
+        final oldPath = Uri.parse(oldAvatarUrl).pathSegments.last;
+        // A more robust way to get the path
+        final oldImagePath = oldAvatarUrl.split('/avatars/').last;
+        if(oldImagePath.isNotEmpty) {
+          await supabase.storage.from('avatars').remove([oldImagePath]);
+        }
+      }
+
+      // 5. Update UI
+      if (mounted) profileProvider.updateAvatar(newImageUrl);
     } catch (e) {
       if (mounted) {
         showInfoDialog(context,
-            title: 'خطأ', content: 'فشل رفع الصورة', isError: true);
+            title: 'خطأ', content: 'فشل رفع الصورة: ${e.toString()}', isError: true);
       }
     }
   }
